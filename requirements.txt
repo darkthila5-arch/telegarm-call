@@ -1,5 +1,5 @@
 # NOTE: do NOT install the normal "pyrogram" package. The [pyrogram] extra brings
 # "pyrogrammod" (a fork that py-tgcalls 3 needs). Both use the module name "pyrogram".
+# tgcrypto removed: it is optional (only speeds up crypto) and needs a C compiler to build.
 py-tgcalls[pyrogram]==3.0.0
-tgcrypto
 python-dotenv
