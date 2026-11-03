@@ -226,7 +226,27 @@ async def status(_, m):
     )
 
 
+async def start_health_server():
+    """Tiny HTTP server so Render 'Web Service' sees an open port (and so an
+    uptime pinger can keep a free instance awake). Only runs if PORT is set."""
+    port = os.getenv("PORT")
+    if not port:
+        return
+
+    async def handle(reader, writer):
+        try:
+            await reader.read(1024)
+            writer.write(b"HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nContent-Length: 2\r\nConnection: close\r\n\r\nok")
+            await writer.drain()
+        finally:
+            writer.close()
+
+    await asyncio.start_server(handle, "0.0.0.0", int(port))
+    log.info("health server listening on port %s", port)
+
+
 async def main():
+    await start_health_server()
     await calls.start()  # also starts the Pyrogram client
     log.info("callbot running (mode=%s)", settings["mode"])
     from pytgcalls import idle
