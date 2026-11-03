@@ -1,0 +1,19 @@
+services:
+  - type: worker            # Background Worker (web port ඕනේ නෑ)
+    name: tg-callbot
+    runtime: docker
+    plan: starter           # persistent disk ඕන නිසා paid plan එකක් ඕනේ
+    autoDeploy: true
+    envVars:
+      - key: API_ID
+        sync: false         # Render dashboard එකේ අගය දාන්න
+      - key: API_HASH
+        sync: false
+      - key: SESSION_STRING
+        sync: false
+      - key: DATA_DIR
+        value: /var/data
+    disk:
+      name: callbot-data
+      mountPath: /var/data  # clip + settings.json මෙතන save වෙනවා
+      sizeGB: 1
