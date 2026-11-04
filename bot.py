@@ -146,9 +146,31 @@ async def set_call(_, m):
     if not media:
         return await m.reply("Reply to a video / audio / voice note with .setcall")
     is_audio = bool(src.audio or src.voice)
-    note = await m.reply("Downloading...")
+    size_mb = (getattr(media, "file_size", 0) or 0) / 1_048_576
+    note = await m.reply(f"Downloading... ({size_mb:.0f} MB)")
     dest = DATA_DIR / f"clip_{int(time.time())}"
-    path = await src.download(file_name=str(dest) + "_")
+    last = [0.0]
+
+    async def progress(cur, total):  # edit at most every 5s, never fail the download because of it
+        if time.time() - last[0] < 5 or not total:
+            return
+        last[0] = time.time()
+        try:
+            await note.edit(f"Downloading... {cur * 100 // total}%")
+        except Exception:
+            pass
+
+    try:
+        path = await asyncio.wait_for(
+            src.download(file_name=str(dest) + "_", progress=progress), timeout=600
+        )
+    except asyncio.TimeoutError:
+        return await note.edit("Download timed out (10 min). Try a smaller clip (<30 MB) or restart the server.")
+    except Exception as e:
+        log.exception("download failed")
+        return await note.edit(f"Download failed: {e!r}\nTry a smaller clip, then .setcall again.")
+    if not path:
+        return await note.edit("Download failed. Try a smaller clip, then .setcall again.")
     old = settings.get("clip")
     settings.update(clip=str(path), kind="audio" if is_audio else "video")
     save_settings(settings)
