@@ -7,7 +7,7 @@ Commands (send them from your own account, any chat, e.g. "Saved Messages"):
   .delcall          deletes the saved clip
   .callmode answer|reject|off   what to do when someone calls you
   .callmsg <text>   (reject mode) message sent to the caller; '.callmsg off' clears it
-  .callto <@user|id>  (experimental) call someone and play the clip
+  .callto <@user|+number|id>  (experimental) call someone and play the clip
   .hangup <@user|id>  end a call
   .callstatus       show settings
   .menu             pretty command menu (with image + animation)
@@ -27,6 +27,8 @@ from pathlib import Path
 
 from dotenv import load_dotenv
 from pyrogram import Client, filters
+from pyrogram.errors import PeerIdInvalid, UsernameNotOccupied
+from pyrogram.types import InputPhoneContact
 from pytgcalls import PyTgCalls, filters as tg_filters
 from pytgcalls.exceptions import CallBusy, CallDeclined, NotInCallError, TimedOutAnswer
 from pytgcalls.types import ChatUpdate, MediaStream
@@ -65,6 +67,12 @@ def save_settings(s: dict) -> None:
 
 
 settings = load_settings()
+
+try:
+    import tgcrypto  # noqa: F401
+    log.info("TgCrypto: ON (fast crypto)")
+except ImportError:
+    log.warning("TgCrypto: MISSING -> downloads will be slow and may time out")
 
 # one explicit event loop, created BEFORE Pyrogram / PyTgCalls (both grab the current loop when built)
 loop = asyncio.new_event_loop()
@@ -215,18 +223,46 @@ async def call_msg(_, m):
     await m.reply("Reject message cleared." if not settings["reject_msg"] else "Reject message saved.")
 
 
+async def resolve_user(raw_target: str) -> int:
+    """@username, numeric user id or phone number (+94...) -> Telegram user id.
+    The session is in-memory, so Pyrogram knows nobody until we resolve them first."""
+    t = raw_target.strip().replace(" ", "").replace("-", "")
+    if t.startswith("@") or (not t.lstrip("+").isdigit()):
+        return (await app.get_users(t.lstrip("@"))).id  # username
+    digits = t.lstrip("+")
+    if not t.startswith("+"):
+        try:  # maybe a real user id we already know
+            return (await app.get_users(int(digits))).id
+        except (PeerIdInvalid, KeyError):
+            if len(digits) < 9:
+                raise
+    # phone number: import as a contact so Telegram hands us the user + access hash
+    res = await app.import_contacts([InputPhoneContact("+" + digits, "Call")])
+    if not res.users:
+        raise ValueError("That number is not on Telegram (or hides it from non-contacts).")
+    await app.fetch_peers(res.users)
+    return res.users[0].id
+
+
 @app.on_message(own("callto"))
 async def call_to(_, m):
     if len(m.command) < 2:
-        return await m.reply(f"Usage: {PREFIX}callto @username|id")
+        return await m.reply(f"Usage: {PREFIX}callto @username  |  +94771234567  |  user id")
     stream = clip_stream()
     if stream is None:
         return await m.reply("No clip saved. Reply to a video with .setcall")
-    target = m.command[1]
-    target = int(target) if target.lstrip("-").isdigit() else target
+    try:
+        uid = await resolve_user("".join(m.command[1:]))
+    except (PeerIdInvalid, UsernameNotOccupied, KeyError):
+        return await m.reply("Can't find that user. Use @username or the full number with country code (+94...).")
+    except ValueError as e:
+        return await m.reply(str(e))
+    except Exception as e:
+        log.exception("resolve failed")
+        return await m.reply(f"Lookup failed: {e!r}")
     await m.reply("Calling...")
     try:
-        await calls.play(target, stream)
+        await calls.play(uid, stream)
     except CallDeclined:
         await m.reply("Declined.")
     except CallBusy:
