@@ -10,11 +10,18 @@ Commands (send them from your own account, any chat, e.g. "Saved Messages"):
   .callto <@user|id>  (experimental) call someone and play the clip
   .hangup <@user|id>  end a call
   .callstatus       show settings
+  .menu             pretty command menu (with image + animation)
+  .alive            status card (with image + animation)
+  .setalive         reply to a photo -> use it as the alive/menu image
+  .alivetext <text> custom line on the alive card ('.alivetext off' clears it)
+  .resetalive       back to the default image / text
+  .ping             latency
 """
 import asyncio
 import json
 import logging
 import os
+import platform
 import time
 from pathlib import Path
 
@@ -23,6 +30,8 @@ from pyrogram import Client, filters
 from pytgcalls import PyTgCalls, filters as tg_filters
 from pytgcalls.exceptions import CallBusy, CallDeclined, NotInCallError, TimedOutAnswer
 from pytgcalls.types import ChatUpdate, MediaStream
+
+import ui
 
 load_dotenv()
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
@@ -36,7 +45,9 @@ DATA_DIR = Path(os.getenv("DATA_DIR", "./data"))
 DATA_DIR.mkdir(parents=True, exist_ok=True)
 SETTINGS_FILE = DATA_DIR / "settings.json"
 
-DEFAULTS = {"mode": "answer", "clip": None, "kind": None, "reject_msg": ""}
+DEFAULTS = {"mode": "answer", "clip": None, "kind": None, "reject_msg": "", "alive_img": None, "alive_text": ""}
+DEFAULT_IMG = Path(__file__).parent / "assets" / "alive.png"
+START_TIME = time.time()
 
 
 # ---------- settings (small JSON file, written atomically) ----------
@@ -220,10 +231,113 @@ async def hangup(_, m):
 @app.on_message(own("callstatus"))
 async def status(_, m):
     await m.reply(
-        f"mode: {settings['mode']}\n"
-        f"clip: {settings['kind'] or 'none'}\n"
-        f"reject msg: {settings['reject_msg'] or '-'}"
+        "<b>📊 Call status</b>\n"
+        f"┣ mode: <code>{settings['mode']}</code>\n"
+        f"┣ clip: <code>{settings['kind'] or 'none'}</code>\n"
+        f"┗ reject msg: <code>{settings['reject_msg'] or '-'}</code>"
     )
+
+
+# ---------- menu / alive (image + animation) ----------
+def alive_image() -> str | None:
+    """Custom image (.setalive) if it still exists, else the bundled default."""
+    custom = settings.get("alive_img")
+    if custom and Path(custom).exists():
+        return custom
+    return str(DEFAULT_IMG) if DEFAULT_IMG.exists() else None
+
+
+async def animate(m, frames: list[str], delay: float = 0.45):
+    """Edit the command message through the frames (looks like a loading animation)."""
+    for f in frames:
+        try:
+            await m.edit_text(f)
+        except Exception:  # message edited too fast / not modified -> just skip the frame
+            pass
+        await asyncio.sleep(delay)
+
+
+async def send_card(m, caption: str):
+    """Replace the animated command message with image + caption (text-only if no image)."""
+    img = alive_image()
+    try:
+        if img:
+            await app.send_photo(m.chat.id, img, caption=caption, reply_to_message_id=m.reply_to_message_id)
+        else:
+            await app.send_message(m.chat.id, caption)
+        await m.delete()
+    except Exception:
+        log.exception("send_card failed, falling back to text")
+        await m.edit_text(caption)
+
+
+@app.on_message(own("menu"))
+async def menu(_, m):
+    await animate(m, ui.menu_frames(), 0.4)
+    await send_card(m, ui.menu_text(PREFIX))
+
+
+@app.on_message(own("alive"))
+async def alive(_, m):
+    await animate(m, ui.alive_frames(), 0.45)
+    t0 = time.perf_counter()
+    await app.get_me()  # real round trip to Telegram = ping
+    ping = round((time.perf_counter() - t0) * 1000, 1)
+    await send_card(
+        m,
+        ui.alive_text(
+            prefix=PREFIX,
+            mode=settings["mode"],
+            clip=settings["kind"],
+            uptime=ui.fmt_uptime(time.time() - START_TIME),
+            ping_ms=ping,
+            py=platform.python_version(),
+            custom=settings.get("alive_text", ""),
+        ),
+    )
+
+
+@app.on_message(own("setalive"))
+async def set_alive(_, m):
+    src = m.reply_to_message
+    if not src or not (src.photo or (src.document and (src.document.mime_type or "").startswith("image/"))):
+        return await m.reply("Reply to a photo with .setalive")
+    note = await m.reply("Saving image...")
+    path = await src.download(file_name=str(DATA_DIR / f"alive_{int(time.time())}_"))
+    old = settings.get("alive_img")
+    settings["alive_img"] = str(path)
+    save_settings(settings)
+    if old and old != str(path):
+        Path(old).unlink(missing_ok=True)
+    await note.edit(f"✅ Alive/menu image updated. Try {PREFIX}alive")
+
+
+@app.on_message(own("alivetext"))
+async def alive_text_cmd(_, m):
+    text = " ".join(m.command[1:]).strip()
+    if not text:
+        return await m.reply(f"Usage: {PREFIX}alivetext <text>   ({PREFIX}alivetext off to clear)")
+    settings["alive_text"] = "" if text.lower() == "off" else text[:120]
+    save_settings(settings)
+    await m.reply("Alive text cleared." if not settings["alive_text"] else "✅ Alive text saved.")
+
+
+@app.on_message(own("resetalive"))
+async def reset_alive(_, m):
+    old = settings.get("alive_img")
+    if old:
+        Path(old).unlink(missing_ok=True)
+    settings.update(alive_img=None, alive_text="")
+    save_settings(settings)
+    await m.reply("Alive image + text reset to default.")
+
+
+@app.on_message(own("ping"))
+async def ping(_, m):
+    t0 = time.perf_counter()
+    msg = await m.reply("🏓 ...")
+    ms = round((time.perf_counter() - t0) * 1000, 1)
+    await msg.edit_text(f"🏓 <b>Pong!</b>  <code>{ms} ms</code>")
 
 
 async def start_health_server():

@@ -22,6 +22,12 @@
 | `.callto @user` | (experimental) අනිත් කෙනාට call කරලා clip එක play කරනවා |
 | `.hangup @user` | call එක කපනවා |
 | `.callstatus` | settings පෙන්වනවා |
+| `.menu` | animation එකකින් පස්සේ image එක සමඟ lassana command menu එක පෙන්වනවා |
+| `.alive` | animation + image + status card (mode, clip, uptime, ping) |
+| `.setalive` | photo එකකට **reply** කරලා alive/menu image එක වෙනස් කරනවා |
+| `.alivetext <text>` | alive card එකට ඔයාගේම line එකක් (`.alivetext off` = ඉවත් කරනවා) |
+| `.resetalive` | image + text default වලට හරවනවා |
+| `.ping` | latency |
 
 Clip එක ඉවර වුණාම call එක ඉබේ කැපෙනවා.
 
